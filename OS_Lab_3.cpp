@@ -1,194 +1,176 @@
 ﻿#include <iostream>
-#include <Windows.h>
-#include <process.h>
+#include <thread>
+#include <mutex>
+#include <vector>
+#include <condition_variable>
 
-bool all_zero(int* threads, int emount)
+// STL version
+
+std::mutex Vector_Lock;
+std::mutex Main_Mutex;
+std::mutex* Marker_Mutex;
+std::condition_variable* cond_val_continue;
+std::condition_variable* cond_val_end;
+std::condition_variable* cond_val_temporal_workend;
+
+bool all_zero(std::vector<int>& threads)
 {
-    for (size_t i = 0; i < emount; i++)
-    {
-        if (threads[i] == 1)
-            return false;
-    }
-    return true;
+	for (size_t i = 0; i < threads.size(); i++)
+	{
+		if (threads[i] == 1)
+			return false;
+	}
+	return true;
 } // Function checks if all threads are stopped. If yes -- returns true. else -- false
 
-struct Array_Size_Num {
-    int size;
-    int* Arr;
-};
-
-Array_Size_Num inf;
-
-CRITICAL_SECTION struct_work;
-
-HANDLE* MarkerN_wait;
-HANDLE* MarkerN_console_stop;
-HANDLE* MarkerN_console_resume;
-// I know that globals are bad, but let it be (a so-so solution exists)
-
-DWORD WINAPI Marker(LPVOID number) 
+void Marker(std::vector<int>& Arr, int num)
 {
+	std::unique_lock<std::mutex> Marker_Wait(Marker_Mutex[num - 1]);
+	Vector_Lock.lock();
 
-    EnterCriticalSection(&struct_work); // Work is started -- protect Inf{Arr, size} from other threads 
+	int index; // oblivious
+	int marked_count = 0; // oblivious
+	std::vector<int> marked_array(Arr.size()); // array to mark indexes of marked elements... cringe
+	std::chrono::duration < double, std::milli> wait(5);
 
-    int num = *(int*)(number); // Thread number
-    int index; // oblivious
-    int marked_count; // oblivious
-    int* marked_array = new int[inf.size]; // array to mark indexes of marked elements... cringe
+	for (size_t i = 0; i < Arr.size(); i++)
+	{
+		marked_array[i] = 0;
+	} // filling array of marks with "false" for each element
 
-    for (size_t i = 0; i < inf.size; i++)
-    {
-        marked_array[i] = 0; 
-    } // filling array of marks with "false" for each element
+	srand(num); // Random generation seed
 
-    srand(num); // Random generation seed
-    marked_count = 0;
-    while (true)
-    {
-        index = rand() % inf.size; // random index in {Inf.Arr}
+	while (true)
+	{
+		index = rand() % Arr.size(); // random index in {Inf.Arr}
 
-        if (inf.Arr[index] == 0)
-        {
-            Sleep(5);
-            inf.Arr[index] = num; // the operation
-            marked_count++; // how much is marked
-            marked_array[index] = 1; // marking indexes to clear them later
-            Sleep(5);           
-        }
-        else
-        {
-            printf("Thread number: %d, marked_count: %d, unmarked index: %d \n", num, marked_count, index);
-            SetEvent(MarkerN_wait[num - 1]); // Work is ended temporarily 
-            LeaveCriticalSection(&struct_work); // Work is ended temporarily -- allow other threads to work
+		if (Arr[index] == 0)
+		{
+			std::this_thread::sleep_for(wait);
+			Arr[index] = num; // the operation
+			marked_count++; // how much is marked
+			marked_array[index] = 1; // marking indexes to clear them later
+			std::this_thread::sleep_for(wait);
+		}
+		else
+		{
+			std::cout << "Thread number: " << num 
+				<< ", marked_count: " << marked_count 
+				<< ", unmarked index: " << index << std::endl;
 
-            WaitForSingleObject(MarkerN_console_stop[num - 1], INFINITE);
+			cond_val_temporal_workend[num - 1].notify_one();
+			Vector_Lock.unlock(); // Work is ended temporarily -- allow other threads to work
 
-            if (WAIT_OBJECT_0 == WaitForSingleObject(MarkerN_console_resume[num - 1], 200))
-            {
-                EnterCriticalSection(&struct_work); // Work is started -- protect Inf{Arr, size} from other threads
-            }     
-            else
-            {
-                EnterCriticalSection(&struct_work); // this one is needed, believe me
-                break;
-            }   
-        }
-    }
+			cond_val_continue[num - 1].wait_for(Marker_Wait, std::chrono::seconds(10));
 
-    for (size_t i = 0; i < inf.size; i++)
-    {
-        if (marked_array[i] == 1)
-        {
-            inf.Arr[i] = 0;
-        }
-    } // filling all marked elements with 0 before leaving
+			if (cond_val_end[num - 1].wait_for(Marker_Wait, std::chrono::milliseconds(200)) == std::cv_status::timeout)
+			{
+				Vector_Lock.lock();
+				break; // cycle ending
+			}
+			else
+			{
+				Vector_Lock.lock();
+			}
+		}
+	}
 
-    LeaveCriticalSection(&struct_work); // Work is ended permanently -- allow other threads to work
+	for (size_t i = 0; i < Arr.size(); i++)
+	{
+		if (marked_array[i] == 1)
+		{
+			Arr[i] = 0;
+		}
+	} // filling all marked elements with 0 before leaving
 
-    ExitThread(0);
+	// <code> std::cout << "Thread number: " << num << " job done" << std::endl;
+
+	Vector_Lock.unlock(); // Work is ended permanently -- allow other threads to work
+
+	return;
 }
 
 int main() {
 
-    int synchronization_time = 0;
-    int thread_emount = 0;
-    printf("Enter array size: ");
-    scanf_s("%d", &inf.size);
-    printf("Enter marker thread emount: ");
-    scanf_s("%d", &thread_emount);
-    // Input
+	std::unique_lock<std::mutex> Main_Lock(Main_Mutex); // Enter Main
+	Vector_Lock.lock();
 
-    if (thread_emount != 0)
-        synchronization_time = 500 / thread_emount;
-    //  for threads to work in {thread_number}-growing sequence [used in Sleep()]
-    
-    inf.Arr = new int[inf.size];
-    for (int i = 0; i < inf.size; ++i) 
-        inf.Arr[i] = 0;
-    // Array filling
+	int size = 0;
+	int thread_emount = 0;
+	std::cout << "Enter array size: ";
+	std::cin >> size;
+	std::cout << "Enter marker thread emount: ";
+	std::cin >> thread_emount;
+	// Input
+	std::vector<int> Arr(size);
+	for (int i = 0; i < Arr.size(); ++i)
+		Arr[i] = 0;
+	// Array filling
 
-    HANDLE* hThread = new void*[thread_emount];
+	int synchro_time = 0;
+	if (thread_emount != 0)
+		synchro_time = 500 / thread_emount;
+	std::chrono::duration < double, std::milli> synchronization_time(synchro_time);
+	//  for threads to work in {thread_number} - growing sequence [used in this_thread::sleep_for]
 
-    MarkerN_wait = new void* [thread_emount];
-    MarkerN_console_resume = new void* [thread_emount];
-    MarkerN_console_stop = new void* [thread_emount];
-    // Memory allocation for Events and Threads
+	std::vector<std::thread> Threads(thread_emount);
+	cond_val_continue = new std::condition_variable[thread_emount];
+	cond_val_end = new std::condition_variable[thread_emount];
+	cond_val_temporal_workend = new std::condition_variable[thread_emount];
+	Marker_Mutex = new std::mutex[thread_emount];
 
-    for (int i = 0; i < thread_emount; i++)
-    {
-        MarkerN_wait[i] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        MarkerN_console_resume[i] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        MarkerN_console_stop[i] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    } // Events initialization 
+	for (size_t i = 0; i < Threads.size(); i++)
+	{
+		Vector_Lock.unlock();
+		Threads[i] = std::thread(Marker, std::ref(Arr), i + 1);
+		cond_val_temporal_workend[i].wait_for(Main_Lock, std::chrono::seconds(1));
+		Vector_Lock.lock();
+	}
 
-    InitializeCriticalSection(&struct_work); // Inf{Arr, size} is the one Critical Section in application
+	std::vector<int> end_of_threads(thread_emount, 1);
 
-    int* end_of_threads = new int[thread_emount];
-    for (int i = 0; i < thread_emount; ++i)
-    {
-        end_of_threads[i] = 1; // proof of thread not closed (needed further)
-    }
+	while (!all_zero(end_of_threads)) // While not all threads are finished
+	{
+		int break_num;
+		std::cout << "Enter num of Marker() to break: ";
+		std::cin >> break_num;
+		break_num--; // input of index of Thread to stop 
 
-    int* numbers = new int[thread_emount]; // Unique memory places for Marker() arguments
+		Vector_Lock.unlock();
+		cond_val_continue[break_num].notify_all();
 
-    for (int i = 0; i < thread_emount; i++)
-    {
-        numbers[i] = i + 1;
-        hThread[i] = CreateThread(nullptr, 0, Marker, &numbers[i], CREATE_SUSPENDED, nullptr);
-        ResumeThread(hThread[i]);
+		Threads[break_num].join(); // Wait
 
-        Sleep(synchronization_time); // threads to work in {thread_number}-growing sequence [and it's just beautiful]
-    } // Threads creation
+		Vector_Lock.lock();
 
-    while (!all_zero(end_of_threads, thread_emount)) // While not all threads are finished
-    {
-        for (int i = 0; i < thread_emount; i++)
-        {
-            if (end_of_threads[i] != 0)
-                WaitForSingleObject(MarkerN_wait[i], INFINITE);
-        } // Works? -- Works!! (Wait for all !working! threads' events {MarkerN_wait[i]})
+		std::cout << "Array: ";
+		for (int i = 0; i < Arr.size(); ++i)
+			std::cout << Arr[i] << " "; // Console output of {inf.Arr}
+		std::cout << std::endl;
 
-        int break_num;
-        printf("Enter num of Marker() to break: ");
-        scanf_s("%d", &break_num);
-        break_num--; // input of index of Thread to stop 
-        
-        SetEvent(MarkerN_console_stop[break_num]); // Thread stopping
-        WaitForSingleObject(hThread[break_num], INFINITE); // Wait
+		end_of_threads[break_num] = 0; // Proof, that thread (number {break_num}) is stopped
 
-        printf("Array: ");
-        for (int i = 0; i < inf.size; ++i)
-            printf("%d ", inf.Arr[i]); // Console output of {inf.Arr}
-        printf("\n");
+		for (size_t i = 0; i < thread_emount; i++)
+		{
+			if (end_of_threads[i] != 0)
+			{
+				// <code> std::cout << "Thread: " << i + 1 << std::endl;
+				Vector_Lock.unlock();
+				cond_val_continue[i].notify_all();
+				std::this_thread::sleep_for(std::chrono::duration < double, std::milli>(50));
+				cond_val_end[i].notify_all();
+				cond_val_temporal_workend[i].wait_for(Main_Lock, std::chrono::seconds(1));
+				Vector_Lock.lock();
+			}
+		}
+	}
 
-        end_of_threads[break_num] = 0; // Proof, that thread (number {break_num}) is stopped
+	Vector_Lock.unlock();
 
-        for (size_t i = 0; i < thread_emount; i++)
-        {
-            if (end_of_threads[i] != 0)
-            {
-                SetEvent(MarkerN_console_stop[i]);
-                SetEvent(MarkerN_console_resume[i]);
+	delete[] cond_val_continue;
+	delete[] cond_val_end;
+	delete[] cond_val_temporal_workend;
+	delete[] Marker_Mutex;
 
-                Sleep(synchronization_time); // threads to work in {thread_number}-growing sequence [and it's just beautiful]
-            }
-        } // Signal for others to resume work
-
-        CloseHandle(hThread[break_num]);
-        CloseHandle(MarkerN_wait[break_num]);
-        CloseHandle(MarkerN_console_stop[break_num]);
-        CloseHandle(MarkerN_console_resume[break_num]); // Closing all objects needed for stopped thread
-    }
-
-    DeleteCriticalSection(&struct_work); // Critical Section Inf{Arr, size} is no more needed
-
-    delete[] numbers;
-    delete[] end_of_threads;
-    delete[] hThread;
-    delete[] MarkerN_wait;
-    delete[] MarkerN_console_resume;
-    delete[] MarkerN_console_stop;
-    delete[] inf.Arr; // Memory cleaning
-
-    return 0;
+	return 0;
 }
