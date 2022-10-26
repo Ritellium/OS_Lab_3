@@ -1,13 +1,12 @@
 ﻿#include <iostream>
-#include <thread>
-#include <mutex>
-#include <vector>
+#include <Windows.h>
+#include <stdlib.h>
+#include <cstdio>
 #include <condition_variable>
 
 constexpr int WaitForEndTime = 200;
 constexpr int MaxSynchoTime = 500;
 constexpr int SleepTime = 5;
-
 
 bool all_zero(const int* threads, int emount)
 {
@@ -27,6 +26,11 @@ struct Array_Size_Num {
 };
 
 Array_Size_Num information;
+
+CRITICAL_SECTION struct_work;
+HANDLE* MarkerN_wait;
+HANDLE* MarkerN_console_resume;
+HANDLE* MarkerN_console_stop;
 
 DWORD WINAPI Marker(LPVOID number) 
 {
