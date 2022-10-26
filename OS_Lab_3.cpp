@@ -1,6 +1,8 @@
 ﻿#include <iostream>
-#include <Windows.h>
-#include <process.h>
+#include <thread>
+#include <mutex>
+#include <vector>
+#include <condition_variable>
 
 constexpr int WaitForEndTime = 200;
 constexpr int MaxSynchoTime = 500;
@@ -26,16 +28,8 @@ struct Array_Size_Num {
 
 Array_Size_Num information;
 
-CRITICAL_SECTION struct_work;
-
-HANDLE* MarkerN_wait;
-HANDLE* MarkerN_console_stop;
-HANDLE* MarkerN_console_resume;
-// I know that globals are bad, but let it be (a so-so solution exists)
-
 DWORD WINAPI Marker(LPVOID number) 
 {
-
     EnterCriticalSection(&struct_work); // Work is started -- protect Inf{Arr, size} from other threads 
 
     int num = *(int*)(number); // Thread number
@@ -96,7 +90,6 @@ DWORD WINAPI Marker(LPVOID number)
 }
 
 int main() {
-
     int synchronization_time = 0;
     int thread_emount = 0;
     printf("Enter array size: ");
@@ -115,11 +108,11 @@ int main() {
         information.Arr[i] = 0;
     }
 
-    HANDLE* hThread = new void*[thread_emount];
+    HANDLE* hThread = new HANDLE[thread_emount];
 
-    MarkerN_wait = new void* [thread_emount];
-    MarkerN_console_resume = new void* [thread_emount];
-    MarkerN_console_stop = new void* [thread_emount];
+    MarkerN_wait = new HANDLE[thread_emount];
+    MarkerN_console_resume = new HANDLE[thread_emount];
+    MarkerN_console_stop = new HANDLE[thread_emount];
     // Memory allocation for Events and Threads
 
     for (int i = 0; i < thread_emount; i++)
